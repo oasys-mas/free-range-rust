@@ -1,0 +1,24 @@
+[package]
+name = "free_range_rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["C4 Patino <c4patino@gmail.com>"]
+license-file = "LICENSE"
+description = "Python bindings in Rust for singificantly faster computation for the free-range-zoo library"
+repository = "https://github.com/C4theBomb/free-range-rust"
+
+[lib]
+name = "free_range_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+debug_tree = "0.4.0"
+pyo3 = "0.21.0"
+tch = { version = "0.18.0", features = ["download-libtorch"] }
+pyo3-tch = "0.18.0"
+rand = "0.8.5"
+rand_distr = "0.4.3"
+log = "0.4.22"
+pyo3-log = "0.11.0"
+simple_logger = "5.0.0"
+rayon = "1.10.0"

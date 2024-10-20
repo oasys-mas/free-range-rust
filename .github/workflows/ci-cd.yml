@@ -1,0 +1,96 @@
+name: CI / CD
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*.*.*"]
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: ["*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Activate nix-shell
+        uses: nicknovitski/nix-develop@v1.2.0
+        with:
+          arguments: "github:C4theBomb/nixos-config#rust-dev"
+      - name: Run tests
+        uses: actions-rs/cargo@v1.0.1
+        with:
+          command: test
+          args: --release --all-features
+  increment:
+    runs-on: [self-hosted]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.ref == 'refs/heads/main')
+    needs: test
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Determine PR merge or direct push
+        id: pr-merge
+        run: | 
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.event.head_commit.message }}" == "Merge pull request"* ]]; then
+            echo "This is a PR merge commit."
+            echo "::set-output name=pr_merge::true"
+          else
+            echo "This is a direct push to main."
+            echo "::set-output name=pr_merge::false"
+          fi
+      - name: Determine version bump type
+        id: version-bump
+        run: |
+          pr_merge="${{ steps.check-pr-merge.outputs.pr_merge }}"
+
+          if [ "$pr_merge" == "true" ]; then
+            tags="${{ steps.get_pr_tags.outputs.tags }}"
+
+            bump_type="patch"
+
+            if [[ "$tags" =~ "major" ]]; then
+              bump_type="major"
+            elif [[ "$tags" =~ "minor" ]]; then
+              bump_type="minor"
+            fi
+
+            echo "PR merge detected. Bumping version as $bump_type."
+          else
+            bump_type="patch"
+            echo "Direct push to main detected. Bumping version as patch."
+          fi
+
+          echo "::set-output name=bump_type::$bump_type"
+      - name: Activate nix-shell
+        uses: nicknovitski/nix-develop@v1.2.0
+        with:
+          arguments: "github:C4theBomb/nixos-config#rust-dev"
+      - name: Cargo version bump
+        uses: actions-rs/cargo@v1.0.1
+        with:
+          command: release
+          args: version ${{ steps.version-bump.outputs.bump_type }} --execute --no-confirm
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5.0.1
+        with:
+          commit_message: "[skip ci] Incrementing project version"
+  build:
+    runs-on: [self-hosted]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.ref == 'refs/heads/main')
+    needs: increment
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Build and publish package
+        run: |
+          docker run --rm \
+            -e MATURIN_PYPI_TOKEN=${{ secrets.PYPI_TOKEN }} \
+            -v $(pwd):/io \
+            ghcr.io/pyo3/maturin publish
