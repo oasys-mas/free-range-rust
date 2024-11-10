@@ -174,6 +174,14 @@ impl Space {
             _ => panic!("Cannot call enumerate_nested on non-vector space"),
         }
     }
+
+    fn __repr__(&self) -> String {
+        format!("{:#?}", self)
+    }
+
+    fn __str__(&self) -> String {
+        format!("{:#?}", self)
+    }
 }
 
 #[cfg(test)]

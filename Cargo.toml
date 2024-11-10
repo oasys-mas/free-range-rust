@@ -9,7 +9,7 @@ repository = "https://github.com/C4theBomb/free-range-rust"
 
 [lib]
 name = "free_range_rust"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 debug_tree = "0.4.0"
