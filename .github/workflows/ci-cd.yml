@@ -11,18 +11,10 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Activate nix-shell
-        uses: nicknovitski/nix-develop@v1.2.0
-        with:
-          arguments: "github:C4theBomb/nixos-config#rust-dev"
-      - name: Activate nix-shell
-        uses: nicknovitski/nix-develop@v1.2.0
-        with:
-          arguments: "github:C4theBomb/nixos-config#python312-dev"
       - name: Run tests
         uses: actions-rs/cargo@v1.0.1
         with:
