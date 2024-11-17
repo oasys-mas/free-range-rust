@@ -3,7 +3,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
 #[pyclass]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Space {
     /// A discrete space with a range of values.
     Discrete { n: i32, start: i32 },
@@ -181,6 +181,10 @@ impl Space {
 
     fn __str__(&self) -> String {
         format!("{:#?}", self)
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self == other
     }
 }
 
