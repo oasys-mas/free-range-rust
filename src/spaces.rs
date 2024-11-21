@@ -1,11 +1,16 @@
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 #[pyclass]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Space {
     /// A discrete space with a range of values.
+    #[pyo3(name = "Discrete")]
     Discrete { n: i32, start: i32 },
 
     /// A space that represents one of multiple possible sub-spaces.
@@ -14,8 +19,49 @@ pub enum Space {
     /// A box space defined by lower and upper bounds.
     Box { low: Vec<i32>, high: Vec<i32> },
 
+    /// A tuple space containing multiple sub-spaces.
+    Tuple { spaces: Vec<Space> },
+
+    /// A dictionary space containing multiple sub-spaces.
+    Dict { spaces: HashMap<String, Space> },
+
     /// A vector space containing multiple sub-spaces.
     Vector { spaces: Vec<Space> },
+}
+
+impl Hash for Sample {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Sample::Discrete(val) => val.hash(state),
+            Sample::OneOf(idx, box_sample) => {
+                idx.hash(state);
+                box_sample.hash(state); // Hash the inner sample
+            }
+            Sample::Box(vec) => {
+                // Hash each element in the Vec
+                vec.hash(state);
+            }
+            Sample::Tuple(vec) => {
+                // Hash each element in the tuple
+                vec.hash(state);
+            }
+            Sample::Dict(map) => {
+                // Hash each key-value pair in the HashMap
+                let mut sorted_entries: Vec<_> = map.iter().collect();
+                sorted_entries.sort_by(|a, b| a.0.cmp(b.0)); // Sort by key to ensure deterministic hashing
+                for (key, value) in sorted_entries {
+                    key.hash(state);
+                    value.hash(state); // Hash the value (which is a `Sample`)
+                }
+            }
+        }
+    }
+}
+
+impl Display for Space {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt(f, 0)
+    }
 }
 
 impl Space {
@@ -27,67 +73,64 @@ impl Space {
         Space::OneOf { spaces }
     }
 
-    pub fn new_vector(spaces: Vec<Space>) -> Self {
-        Space::Vector { spaces }
+    pub fn new_tuple(spaces: Vec<Space>) -> Self {
+        Space::Tuple { spaces }
     }
 
     pub fn new_box(low: Vec<i32>, high: Vec<i32>) -> Self {
         Space::Box { low, high }
     }
-}
 
-#[pymethods]
-impl Space {
-    #[new]
-    #[pyo3(signature=(variant, n=None, start=None, spaces=None, low=None, high = None))]
-    fn py_new(
-        variant: &str,
-        n: Option<i32>,
-        start: Option<i32>,
-        spaces: Option<Vec<Space>>,
-        low: Option<Vec<i32>>,
-        high: Option<Vec<i32>>,
-    ) -> Self {
-        match variant {
-            "discrete" => Space::Discrete {
-                n: n.expect("Discrete space requires n"),
-                start: start.unwrap_or(0),
-            },
-            "box" => {
-                let high = high.expect("Box space requires high");
-                Space::Box {
-                    low: low.unwrap_or(vec![0; high.len()]),
-                    high,
-                }
-            }
-            "oneof" => Space::OneOf {
-                spaces: spaces.expect("OneOf spaces requires spaces"),
-            },
-            "vector" => Space::Vector {
-                spaces: spaces.expect("OneOf spaces requires spaces"),
-            },
-            _ => panic!("Unknown variant: {}", variant),
-        }
+    pub fn new_dict(spaces: HashMap<String, Space>) -> Self {
+        Space::Dict { spaces }
     }
 
-    pub fn sample(&self) -> Vec<i32> {
-        //!  Sample a single value from the space.
+    pub fn new_vector(spaces: Vec<Space>) -> Self {
+        Space::Vector { spaces }
+    }
+
+    ///  Sample a single value from the space.
+    pub fn sample(&self) -> Sample {
         let mut rng = StdRng::from_entropy();
 
         let result = match self {
-            Space::Discrete { n, start, .. } => vec![rng.gen_range(*start..(*start + *n))],
-            Space::Box { low, high } => low
-                .iter()
-                .zip(high.iter())
-                .map(|(l, h)| rng.gen_range(*l..=*h))
-                .collect(),
-            Space::OneOf { spaces, .. } => {
-                let index = rng.gen_range(0..spaces.len());
-                let sub_sample = &spaces[index].sample();
-                let mut result = vec![index as i32];
-                result.extend(sub_sample);
-                result
+            Space::Discrete { n, start } => {
+                if *n == 0 {
+                    panic!("Cannot sample from empty discrete space")
+                }
+
+                Sample::Discrete(rng.gen_range(*start..(*start + *n)))
             }
+            Space::Box { low, high } => Sample::Box(
+                low.iter()
+                    .zip(high.iter())
+                    .map(|(l, h)| rng.gen_range(*l..=*h))
+                    .collect(),
+            ),
+            Space::OneOf { spaces } => {
+                let valid_spaces: Vec<_> = spaces
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(_, space)| match space {
+                        Space::Discrete { n, .. } => *n > 0,
+                        _ => true,
+                    })
+                    .collect();
+
+                if valid_spaces.is_empty() {
+                    panic!("Cannot sample from empty OneOf space")
+                }
+
+                let (index, sub_space) = valid_spaces[rng.gen_range(0..valid_spaces.len())];
+                Sample::OneOf(index as i32, Box::new(sub_space.sample()))
+            }
+            Space::Tuple { spaces } => Sample::Tuple(spaces.par_iter().map(|space| space.sample()).collect()),
+            Space::Dict { spaces } => Sample::Dict(
+                spaces
+                    .par_iter()
+                    .map(|(key, space)| (key.clone(), space.sample()))
+                    .collect(),
+            ),
             _ => panic!("Cannot call sample on vector space"),
         };
 
@@ -95,28 +138,55 @@ impl Space {
     }
 
     ///  Sample a single value from the space with a fixed seed.
-    pub fn sample_with_seed(&self, seed: u64) -> Vec<i32> {
+    pub fn sample_with_seed(&self, seed: u64) -> Sample {
         let mut rng = StdRng::seed_from_u64(seed);
 
-        match self {
-            Space::Discrete { n, start, .. } => vec![rng.gen_range(*start..(*start + *n))],
-            Space::Box { low, high } => low
-                .iter()
-                .zip(high.iter())
-                .map(|(l, h)| rng.gen_range(*l..=*h))
-                .collect(),
-            Space::OneOf { spaces, .. } => {
-                let index = rng.gen_range(0..spaces.len());
-                let mut result = spaces[index].sample_with_seed(seed + 1);
-                result.insert(0, index as i32);
-                result
+        let result = match self {
+            Space::Discrete { n, start } => {
+                if *n == 0 {
+                    panic!("Cannot sample from empty discrete space")
+                }
+
+                Sample::Discrete(rng.gen_range(*start..(*start + *n)))
             }
+            Space::Box { low, high } => Sample::Box(
+                low.iter()
+                    .zip(high.iter())
+                    .map(|(l, h)| rng.gen_range(*l..=*h))
+                    .collect(),
+            ),
+            Space::OneOf { spaces } => {
+                let valid_spaces: Vec<_> = spaces
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(_, space)| match space {
+                        Space::Discrete { n, .. } => *n > 0,
+                        _ => true,
+                    })
+                    .collect();
+
+                if valid_spaces.is_empty() {
+                    panic!("Cannot sample from empty OneOf space")
+                }
+
+                let (index, sub_space) = valid_spaces[rng.gen_range(0..valid_spaces.len())];
+                Sample::OneOf(index as i32, Box::new(sub_space.sample_with_seed(seed + 1)))
+            }
+            Space::Tuple { spaces } => Sample::Tuple(spaces.par_iter().map(|space| space.sample()).collect()),
+            Space::Dict { spaces } => Sample::Dict(
+                spaces
+                    .par_iter()
+                    .map(|(key, space)| (key.clone(), space.sample()))
+                    .collect(),
+            ),
             _ => panic!("Cannot call sample on vector space"),
-        }
+        };
+
+        result
     }
 
     /// Sample a single value from each of the nested spaces.
-    pub fn sample_nested(&self) -> Vec<Vec<i32>> {
+    pub fn sample_nested(&self) -> Vec<Sample> {
         match self {
             Space::Vector { spaces } => spaces.par_iter().map(|space| space.sample()).collect(),
             _ => panic!("Cannot call sample_nested on non-vector space"),
@@ -124,7 +194,7 @@ impl Space {
     }
 
     /// Sample a single value from each of the nested spaces with a fixed seed.
-    pub fn sample_nested_with_seed(&self, seed: u64) -> Vec<Vec<i32>> {
+    pub fn sample_nested_with_seed(&self, seed: u64) -> Vec<Sample> {
         match self {
             Space::Vector { spaces } => spaces.par_iter().map(|space| space.sample_with_seed(seed)).collect(),
             _ => panic!("Cannot call sample_nested on non-vector space"),
@@ -132,59 +202,204 @@ impl Space {
     }
 
     /// Enumerate all possible values in the space.
-    pub fn enumerate(&self) -> Vec<Vec<i32>> {
+    pub fn enumerate(&self) -> Vec<Sample> {
         match self {
-            Space::Discrete { n, start } => (0..*n).map(|i| vec![i + *start]).collect(),
-            Space::Box { low, high } => {
-                let ranges: Vec<Vec<i32>> = low.iter().zip(high.iter()).map(|(&l, &h)| (l..=h).collect()).collect();
+            Space::Discrete { n, start } => (0..*n).map(|i| Sample::Discrete(i + *start)).collect(),
+            Space::Box { low, high } => low
+                .iter()
+                .zip(high.iter())
+                .fold(vec![vec![]], |acc, (l, h)| {
+                    let range = (*l..=*h).collect::<Vec<i32>>();
 
-                ranges.iter().fold(vec![vec![]], |acc, range| {
-                    acc.into_par_iter() // Parallel iterator for the accumulated combinations
-                        .flat_map(|prefix| {
-                            range.par_iter().map(move |&val| {
-                                let mut new_combination = prefix.clone();
-                                new_combination.push(val);
-                                new_combination
+                    acc.into_par_iter()
+                        .flat_map(|sample| {
+                            range.par_iter().map(move |&i| {
+                                let mut new_sample = sample.clone();
+                                new_sample.push(i);
+                                new_sample
                             })
                         })
                         .collect()
                 })
-            }
-            Space::OneOf { spaces } => {
-                spaces
-                    .par_iter()
-                    .enumerate()
-                    .flat_map(|(idx, space)| {
-                        let sub_results = space.enumerate(); // Get the combinations for each subspace
-                        sub_results.into_par_iter().map(move |mut sample| {
-                            let mut with_index = vec![idx as i32];
-                            with_index.append(&mut sample);
-                            with_index
-                        })
-                    })
-                    .collect()
-            }
+                .into_par_iter()
+                .map(Sample::Box)
+                .collect(),
+            Space::OneOf { spaces } => spaces
+                .par_iter()
+                .enumerate()
+                .flat_map(|(idx, space)| {
+                    let sub_results = space.enumerate();
+                    sub_results
+                        .into_par_iter()
+                        .map(move |sample| Sample::OneOf(idx as i32, Box::new(sample)))
+                })
+                .collect(),
             _ => panic!("Cannot call enumerate on vector space"),
         }
     }
 
-    pub fn enumerate_nested(&self) -> Vec<Vec<Vec<i32>>> {
+    /// Enumerate all possible values in the nested spaces.
+    pub fn enumerate_nested(&self) -> Vec<Vec<Sample>> {
         match self {
             Space::Vector { spaces } => spaces.par_iter().map(|space| space.enumerate()).collect(),
             _ => panic!("Cannot call enumerate_nested on non-vector space"),
         }
     }
 
+    /// Format the space as a string.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>, level: usize) -> std::fmt::Result {
+        let indent = "\t".repeat(level);
+
+        match self {
+            Space::Discrete { .. } => write!(f, "{}{:?}", indent, self),
+            Space::OneOf { spaces } => {
+                writeln!(f, "{}OneOf {{ spaces=[", indent)?;
+                for space in spaces {
+                    space.fmt(f, level + 1)?;
+                    writeln!(f)?;
+                }
+                write!(f, "{}])", indent)
+            }
+            Space::Box { .. } => write!(f, "{}{:?}", indent, self),
+            Space::Tuple { spaces } => {
+                write!(f, "{}Tuple {{ spaces=[", indent)?;
+                for space in spaces {
+                    space.fmt(f, level + 1)?;
+                    writeln!(f)?;
+                }
+                write!(f, "{}]}}", indent)
+            }
+            Space::Dict { spaces } => {
+                write!(f, "{}Dict {{ spaces={{", indent)?;
+                for (key, space) in spaces {
+                    write!(f, "{}{}: ", indent, key)?;
+                    space.fmt(f, level + 1)?;
+                }
+                write!(f, "{}}}}}", indent)
+            }
+            Space::Vector { spaces } => {
+                write!(f, "{}Vector {{ spaces=[", indent)?;
+                for space in spaces {
+                    space.fmt(f, level + 1)?;
+                    writeln!(f)?;
+                }
+                write!(f, "{}]}}", indent)
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl Space {
     fn __repr__(&self) -> String {
-        format!("{:#?}", self)
+        format!("{}", self)
     }
 
     fn __str__(&self) -> String {
-        format!("{:#?}", self)
+        format!("{}", self)
     }
 
     fn __eq__(&self, other: &Self) -> bool {
         self == other
+    }
+
+    #[pyo3(name = "sample")]
+    fn py_sample(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python(&self.sample(), py))
+    }
+
+    #[pyo3(name = "sample_with_seed")]
+    fn py_sample_with_seed(&self, seed: u64) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python(&self.sample_with_seed(seed), py))
+    }
+
+    #[pyo3(name = "sample_nested")]
+    fn py_sample_nested(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python_nested(&self.sample_nested(), py))
+    }
+
+    #[pyo3(name = "sample_nested_with_seed")]
+    fn py_sample_nested_with_seed(&self, seed: u64) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python_nested(&self.sample_nested_with_seed(seed), py))
+    }
+
+    #[pyo3(name = "enumerate")]
+    fn py_enumerate(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python_nested(&self.enumerate(), py))
+    }
+
+    #[pyo3(name = "enumerate_nested")]
+    fn py_enumerate_nested(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| Sample::to_python_nested_nested(&self.enumerate_nested(), py))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sample {
+    // A value sampled from a discrete space.
+    Discrete(i32),
+
+    // A value sampled from one of multiple sub-spaces.
+    OneOf(i32, Box<Sample>),
+
+    // A value sampled from a box space.
+    Box(Vec<i32>),
+
+    // A value sampled from a tuple space.
+    Tuple(Vec<Sample>),
+
+    // A value sampled from a dictionary space.
+    Dict(HashMap<String, Sample>),
+}
+
+impl Sample {
+    fn to_python(sample: &Sample, py: Python<'_>) -> PyResult<PyObject> {
+        match sample {
+            Sample::Discrete(val) => Ok(val.into_py(py)), // Convert to Python int
+            Sample::Box(values) => Ok(PyList::new_bound(py, values).into()),
+            Sample::OneOf(index, sample) => {
+                let py_list = PyList::new_bound(py, &[*index]);
+                py_list.append(Self::to_python(sample, py)?)?;
+
+                Ok(py_list.into())
+            }
+            Sample::Tuple(samples) => {
+                let py_list = PyList::new_bound(
+                    py,
+                    samples
+                        .iter()
+                        .map(|s| Self::to_python(s, py))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+
+                Ok(py_list.into())
+            }
+            Sample::Dict(map) => {
+                let py_dict = PyDict::new_bound(py);
+                for (key, value) in map {
+                    let key_py = key.clone().into_py(py);
+                    let value_py = Self::to_python(value, py)?;
+                    py_dict.set_item(key_py, value_py)?;
+                }
+                Ok(py_dict.into())
+            }
+        }
+    }
+
+    fn to_python_nested(nested_sample: &Vec<Sample>, py: Python<'_>) -> PyResult<PyObject> {
+        let py_list = nested_sample
+            .iter()
+            .map(|s| Self::to_python(s, py))
+            .collect::<Result<Vec<PyObject>, _>>()?;
+        Ok(PyList::new_bound(py, py_list).into())
+    }
+
+    fn to_python_nested_nested(nested_sample: &Vec<Vec<Sample>>, py: Python<'_>) -> PyResult<PyObject> {
+        let py_list = nested_sample
+            .iter()
+            .map(|s| Self::to_python_nested(s, py))
+            .collect::<Result<Vec<PyObject>, _>>()?;
+        Ok(PyList::new_bound(py, py_list).into())
     }
 }
 
@@ -198,16 +413,23 @@ mod tests {
         let space = Space::new_discrete(5, 10);
 
         // Sample without a fixed seed
-        let sample = space.sample();
-        assert!(sample[0] >= 10 && sample[0] < 15);
+        let Sample::Discrete(sample) = space.sample() else {
+            panic!("Sample is not of type Sample::Discrete");
+        };
+
+        assert!(sample >= 10 && sample < 15);
 
         // Sample with a fixed seed
         let seed = 42;
-        let sample_with_seed = space.sample_with_seed(seed);
-        assert!(sample_with_seed[0] >= 10 && sample_with_seed[0] < 15);
+        let Sample::Discrete(sample_with_seed) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Discrete");
+        };
+        assert!(sample_with_seed >= 10 && sample_with_seed < 15);
 
         // Consistency check: repeat sampling with the same seed
-        let repeated_sample = space.sample_with_seed(seed);
+        let Sample::Discrete(repeated_sample) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Discrete");
+        };
         assert_eq!(sample_with_seed, repeated_sample);
     }
 
@@ -216,7 +438,9 @@ mod tests {
         let space = Space::new_box(vec![0, 0, 0, 0], vec![1, 2, 3, 4]);
 
         // Sample without a fixed seed
-        let sample = space.sample();
+        let Sample::Box(sample) = space.sample() else {
+            panic!("Sample is not of type Sample::Box");
+        };
         assert!(sample[0] > 0 || sample[0] <= 1);
         assert!(sample[1] > 0 || sample[1] <= 2);
         assert!(sample[2] > 0 || sample[2] <= 3);
@@ -224,14 +448,18 @@ mod tests {
 
         // Sample with a fixed seed
         let seed = 42;
-        let sample_with_seed = space.sample_with_seed(seed);
+        let Sample::Box(sample_with_seed) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Box");
+        };
         assert!(sample_with_seed[0] > 0 || sample_with_seed[0] <= 1);
         assert!(sample_with_seed[1] > 0 || sample_with_seed[1] <= 2);
         assert!(sample_with_seed[2] > 0 || sample_with_seed[2] <= 3);
         assert!(sample_with_seed[3] > 0 || sample_with_seed[3] <= 4);
 
         // Consistency check: repeat sampling with the same seed
-        let repeated_sample = space.sample_with_seed(seed);
+        let Sample::Box(repeated_sample) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Box");
+        };
         assert_eq!(sample_with_seed, repeated_sample);
     }
 
@@ -240,22 +468,40 @@ mod tests {
         let space = Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
 
         // Sample without a fixed seed
-        let sample = space.sample();
-        assert!(
-            (sample[0] == 0 && sample[1] >= 5 && sample[1] < 8)
-                || (sample[0] == 1 && sample[1] >= 10 && sample[1] < 12)
-        );
+        let Sample::OneOf(index, sample) = space.sample() else {
+            panic!("Sample is not of type Sample::OneOf");
+        };
+        let Sample::Discrete(sample) = *sample else {
+            panic!("Inner sample is not of type Sample::Discrete");
+        };
+        assert!((index == 0 && sample >= 5 && sample < 8) || (index == 1 && sample >= 10 && sample < 12));
 
         // Sample with a fixed seed
         let seed = 42;
-        let sample_with_seed = space.sample_with_seed(seed);
+        let Sample::OneOf(index, sample_with_seed) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::OneOf");
+        };
+        let Sample::Discrete(sample_with_seed) = *sample_with_seed else {
+            panic!("Inner sample is not of type Sample::Discrete");
+        };
+        println!("index: {}, sample: {}", index, sample_with_seed);
+
         assert!(
-            (sample_with_seed[0] == 0 && sample_with_seed[1] >= 5 && sample_with_seed[1] < 8)
-                || (sample_with_seed[0] == 1 && sample_with_seed[1] >= 10 && sample_with_seed[1] < 12)
+            (index == 0 && sample_with_seed >= 5 && sample_with_seed < 8)
+                || (index == 1 && sample_with_seed >= 10 && sample_with_seed < 12)
         );
 
         // Consistency check: repeat sampling with the same seed
-        let repeated_sample = space.sample_with_seed(seed);
+        let Sample::OneOf(repeated_index, repeated_sample) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::OneOf");
+        };
+        let Sample::Discrete(repeated_sample) = *repeated_sample else {
+            panic!("Inner sample is not of type Sample::Discrete");
+        };
+
+        println!("index: {}, sample: {}", repeated_index, repeated_sample);
+
+        assert_eq!(index, repeated_index);
         assert_eq!(sample_with_seed, repeated_sample);
     }
 
@@ -266,19 +512,44 @@ mod tests {
         // Test nested sampling without a fixed seed
         let nested_sample = space.sample_nested();
         assert_eq!(nested_sample.len(), 2);
-        assert!(nested_sample[0][0] >= 10 && nested_sample[0][0] < 15);
-        assert!(nested_sample[1][0] >= 20 && nested_sample[1][0] < 22);
+
+        let Sample::Discrete(first_sample) = nested_sample[0] else {
+            panic!("First sample is not of type Sample::Discrete");
+        };
+
+        let Sample::Discrete(second_sample) = nested_sample[1] else {
+            panic!("Second sample is not of type Sample::Discrete");
+        };
+
+        assert!(first_sample >= 10 && first_sample < 15);
+        assert!(second_sample >= 20 && second_sample < 22);
 
         // Test nested sampling with a fixed seed
         let seed = 42;
         let nested_sample_with_seed = space.sample_nested_with_seed(seed);
         assert_eq!(nested_sample_with_seed.len(), 2);
-        assert!(nested_sample_with_seed[0][0] >= 10 && nested_sample_with_seed[0][0] < 15);
-        assert!(nested_sample_with_seed[1][0] >= 20 && nested_sample_with_seed[1][0] < 22);
+
+        let samples: Vec<i32> = nested_sample_with_seed
+            .iter()
+            .map(|sample| match sample {
+                Sample::Discrete(i) => *i,
+                _ => panic!("Sample is not of type Sample::Discrete"),
+            })
+            .collect();
+
+        assert!(samples[0] >= 10 && samples[0] < 15);
+        assert!(samples[1] >= 20 && samples[1] < 22);
 
         // Consistency check: repeat nested sampling with the same seed
         let repeated_nested_sample = space.sample_nested_with_seed(seed);
-        assert_eq!(nested_sample_with_seed, repeated_nested_sample);
+        let repeat_sample: Vec<i32> = repeated_nested_sample
+            .iter()
+            .map(|sample| match sample {
+                Sample::Discrete(i) => *i,
+                _ => panic!("Sample is not of type Sample::Discrete"),
+            })
+            .collect();
+        assert_eq!(samples, repeat_sample);
     }
 
     #[test]
@@ -320,7 +591,7 @@ mod tests {
         assert_eq!(enumerated.len(), 5);
 
         for (i, sample) in enumerated.iter().enumerate() {
-            assert_eq!(sample, &[i as i32 + 10]);
+            assert_eq!(sample, &Sample::Discrete(i as i32 + 10));
         }
     }
 
@@ -330,12 +601,14 @@ mod tests {
 
         let result = space.enumerate();
 
-        println!("{:#?}", result);
-
         assert_eq!(result.len(), 24);
 
         let mut seen = HashSet::new();
         for sample in result.iter() {
+            let Sample::Box(sample) = sample else {
+                panic!("Sample is not of type Sample::Box")
+            };
+
             assert!(sample[0] >= 0 && sample[0] <= 1);
             assert!(sample[1] >= 0 && sample[1] <= 2);
             assert!(sample[2] >= 0 && sample[2] <= 3);
@@ -366,8 +639,8 @@ mod tests {
 
         assert_eq!(result.len(), 2);
 
-        let expected_first_space: Vec<Vec<i32>> = (10..15).map(|i| vec![i]).collect();
-        let expected_second_space: Vec<Vec<i32>> = (20..22).map(|i| vec![i]).collect();
+        let expected_first_space: Vec<Sample> = (10..15).map(|i| Sample::Discrete(i)).collect();
+        let expected_second_space: Vec<Sample> = (20..22).map(|i| Sample::Discrete(i)).collect();
 
         assert_eq!(result[0], expected_first_space);
         assert_eq!(result[1], expected_second_space);
