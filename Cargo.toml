@@ -1,6 +1,6 @@
 [package]
 name = "free_range_rust"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["C4 Patino <c4patino@gmail.com>"]
 license-file = "LICENSE"
