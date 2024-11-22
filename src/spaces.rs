@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
@@ -27,35 +26,6 @@ pub enum Space {
 
     /// A vector space containing multiple sub-spaces.
     Vector { spaces: Vec<Space> },
-}
-
-impl Hash for Sample {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            Sample::Discrete(val) => val.hash(state),
-            Sample::OneOf(idx, box_sample) => {
-                idx.hash(state);
-                box_sample.hash(state); // Hash the inner sample
-            }
-            Sample::Box(vec) => {
-                // Hash each element in the Vec
-                vec.hash(state);
-            }
-            Sample::Tuple(vec) => {
-                // Hash each element in the tuple
-                vec.hash(state);
-            }
-            Sample::Dict(map) => {
-                // Hash each key-value pair in the HashMap
-                let mut sorted_entries: Vec<_> = map.iter().collect();
-                sorted_entries.sort_by(|a, b| a.0.cmp(b.0)); // Sort by key to ensure deterministic hashing
-                for (key, value) in sorted_entries {
-                    key.hash(state);
-                    value.hash(state); // Hash the value (which is a `Sample`)
-                }
-            }
-        }
-    }
 }
 
 impl Display for Space {
@@ -109,7 +79,7 @@ impl Space {
             ),
             Space::OneOf { spaces } => {
                 let valid_spaces: Vec<_> = spaces
-                    .par_iter()
+                    .iter()
                     .enumerate()
                     .filter(|(_, space)| match space {
                         Space::Discrete { n, .. } => *n > 0,
@@ -124,10 +94,10 @@ impl Space {
                 let (index, sub_space) = valid_spaces[rng.gen_range(0..valid_spaces.len())];
                 Sample::OneOf(index as i32, Box::new(sub_space.sample()))
             }
-            Space::Tuple { spaces } => Sample::Tuple(spaces.par_iter().map(|space| space.sample()).collect()),
+            Space::Tuple { spaces } => Sample::Tuple(spaces.iter().map(|space| space.sample()).collect()),
             Space::Dict { spaces } => Sample::Dict(
                 spaces
-                    .par_iter()
+                    .iter()
                     .map(|(key, space)| (key.clone(), space.sample()))
                     .collect(),
             ),
@@ -157,7 +127,7 @@ impl Space {
             ),
             Space::OneOf { spaces } => {
                 let valid_spaces: Vec<_> = spaces
-                    .par_iter()
+                    .iter()
                     .enumerate()
                     .filter(|(_, space)| match space {
                         Space::Discrete { n, .. } => *n > 0,
@@ -172,10 +142,10 @@ impl Space {
                 let (index, sub_space) = valid_spaces[rng.gen_range(0..valid_spaces.len())];
                 Sample::OneOf(index as i32, Box::new(sub_space.sample_with_seed(seed + 1)))
             }
-            Space::Tuple { spaces } => Sample::Tuple(spaces.par_iter().map(|space| space.sample()).collect()),
+            Space::Tuple { spaces } => Sample::Tuple(spaces.iter().map(|space| space.sample()).collect()),
             Space::Dict { spaces } => Sample::Dict(
                 spaces
-                    .par_iter()
+                    .iter()
                     .map(|(key, space)| (key.clone(), space.sample()))
                     .collect(),
             ),
@@ -188,7 +158,7 @@ impl Space {
     /// Sample a single value from each of the nested spaces.
     pub fn sample_nested(&self) -> Vec<Sample> {
         match self {
-            Space::Vector { spaces } => spaces.par_iter().map(|space| space.sample()).collect(),
+            Space::Vector { spaces } => spaces.iter().map(|space| space.sample()).collect(),
             _ => panic!("Cannot call sample_nested on non-vector space"),
         }
     }
@@ -196,7 +166,7 @@ impl Space {
     /// Sample a single value from each of the nested spaces with a fixed seed.
     pub fn sample_nested_with_seed(&self, seed: u64) -> Vec<Sample> {
         match self {
-            Space::Vector { spaces } => spaces.par_iter().map(|space| space.sample_with_seed(seed)).collect(),
+            Space::Vector { spaces } => spaces.iter().map(|space| space.sample_with_seed(seed)).collect(),
             _ => panic!("Cannot call sample_nested on non-vector space"),
         }
     }
@@ -211,29 +181,71 @@ impl Space {
                 .fold(vec![vec![]], |acc, (l, h)| {
                     let range = (*l..=*h).collect::<Vec<i32>>();
 
-                    acc.into_par_iter()
+                    acc.into_iter()
                         .flat_map(|sample| {
-                            range.par_iter().map(move |&i| {
+                            range.iter().map(move |i| {
                                 let mut new_sample = sample.clone();
-                                new_sample.push(i);
+                                new_sample.push(*i);
                                 new_sample
                             })
                         })
                         .collect()
                 })
-                .into_par_iter()
+                .into_iter()
                 .map(Sample::Box)
                 .collect(),
             Space::OneOf { spaces } => spaces
-                .par_iter()
+                .iter()
                 .enumerate()
                 .flat_map(|(idx, space)| {
                     let sub_results = space.enumerate();
                     sub_results
-                        .into_par_iter()
+                        .into_iter()
                         .map(move |sample| Sample::OneOf(idx as i32, Box::new(sample)))
                 })
                 .collect(),
+            Space::Tuple { spaces } => spaces
+                .iter()
+                .fold(vec![vec![]], |acc, space| {
+                    let sub_results = space.enumerate();
+                    acc.into_iter()
+                        .flat_map(|prefix| {
+                            sub_results.iter().map(move |sample| {
+                                let mut new_tuple = prefix.clone();
+                                new_tuple.push(sample.clone());
+                                new_tuple
+                            })
+                        })
+                        .collect()
+                })
+                .into_iter()
+                .map(Sample::Tuple)
+                .collect(),
+            Space::Dict { spaces } => {
+                let keys: Vec<_> = spaces.keys().cloned().collect();
+                let enumerations: Vec<_> = keys.iter().map(|key| spaces[key].enumerate()).collect();
+
+                enumerations
+                    .iter()
+                    .fold(vec![HashMap::new()], |acc, sub_enumeration| {
+                        acc.into_iter()
+                            .flat_map(|partial_dict| {
+                                // Capture a reference to `keys`
+                                let keys_ref = &keys;
+
+                                sub_enumeration.iter().map(move |sample| {
+                                    let mut new_dict = partial_dict.clone();
+                                    let key = &keys_ref[partial_dict.len()]; // Use partial_dict.len() for the index
+                                    new_dict.insert(key.clone(), sample.clone());
+                                    new_dict
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .into_iter()
+                    .map(Sample::Dict)
+                    .collect()
+            }
             _ => panic!("Cannot call enumerate on vector space"),
         }
     }
@@ -241,7 +253,7 @@ impl Space {
     /// Enumerate all possible values in the nested spaces.
     pub fn enumerate_nested(&self) -> Vec<Vec<Sample>> {
         match self {
-            Space::Vector { spaces } => spaces.par_iter().map(|space| space.enumerate()).collect(),
+            Space::Vector { spaces } => spaces.iter().map(|space| space.enumerate()).collect(),
             _ => panic!("Cannot call enumerate_nested on non-vector space"),
         }
     }
@@ -304,13 +316,13 @@ impl Space {
     }
 
     #[pyo3(name = "sample")]
-    fn py_sample(&self) -> PyResult<PyObject> {
-        Python::with_gil(|py| Sample::to_python(&self.sample(), py))
+    fn py_sample(&self) -> PyObject {
+        Python::with_gil(|py| Sample::into_py(self.sample(), py))
     }
 
     #[pyo3(name = "sample_with_seed")]
-    fn py_sample_with_seed(&self, seed: u64) -> PyResult<PyObject> {
-        Python::with_gil(|py| Sample::to_python(&self.sample_with_seed(seed), py))
+    fn py_sample_with_seed(&self, seed: u64) -> PyObject {
+        Python::with_gil(|py| Sample::into_py(self.sample_with_seed(seed), py))
     }
 
     #[pyo3(name = "sample_nested")]
@@ -352,45 +364,94 @@ pub enum Sample {
     Dict(HashMap<String, Sample>),
 }
 
-impl Sample {
-    fn to_python(sample: &Sample, py: Python<'_>) -> PyResult<PyObject> {
-        match sample {
-            Sample::Discrete(val) => Ok(val.into_py(py)), // Convert to Python int
-            Sample::Box(values) => Ok(PyList::new_bound(py, values).into()),
-            Sample::OneOf(index, sample) => {
-                let py_list = PyList::new_bound(py, &[*index]);
-                py_list.append(Self::to_python(sample, py)?)?;
+impl Hash for Sample {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Sample::Discrete(val) => val.hash(state),
+            Sample::OneOf(idx, box_sample) => {
+                idx.hash(state);
+                box_sample.hash(state); // Hash the inner sample
+            }
+            Sample::Box(vec) => {
+                // Hash each element in the Vec
+                vec.hash(state);
+            }
+            Sample::Tuple(vec) => {
+                // Hash each element in the tuple
+                vec.hash(state);
+            }
+            Sample::Dict(map) => {
+                // Hash each key-value pair in the HashMap
+                let mut sorted_entries: Vec<_> = map.iter().collect();
+                sorted_entries.sort_by(|a, b| a.0.cmp(b.0)); // Sort by key to ensure deterministic hashing
+                for (key, value) in sorted_entries {
+                    key.hash(state);
+                    value.hash(state); // Hash the value (which is a `Sample`)
+                }
+            }
+        }
+    }
+}
 
-                Ok(py_list.into())
+impl IntoPy<PyObject> for Sample {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self {
+            Sample::Discrete(val) => val.into_py(py),
+            Sample::Box(values) => {
+                let py_list = PyList::new_bound(py, values);
+                py_list.into()
+            }
+            Sample::OneOf(index, sample) => {
+                let py_list = PyList::new_bound(py, &[index.into_py(py), sample.into_py(py)]);
+                py_list.into()
             }
             Sample::Tuple(samples) => {
-                let py_list = PyList::new_bound(
-                    py,
-                    samples
-                        .iter()
-                        .map(|s| Self::to_python(s, py))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-
-                Ok(py_list.into())
+                let py_list = PyList::new_bound(py, samples.into_iter().map(|s| s.into_py(py)).collect::<Vec<_>>());
+                py_list.into()
             }
             Sample::Dict(map) => {
                 let py_dict = PyDict::new_bound(py);
                 for (key, value) in map {
-                    let key_py = key.clone().into_py(py);
-                    let value_py = Self::to_python(value, py)?;
-                    py_dict.set_item(key_py, value_py)?;
+                    py_dict
+                        .set_item(key.into_py(py), value.into_py(py))
+                        .expect("Failed to set item");
                 }
-                Ok(py_dict.into())
+                py_dict.into()
+            }
+        }
+    }
+}
+
+impl Sample {
+    fn to_python(sample: Sample, py: Python<'_>) -> PyObject {
+        match sample {
+            Sample::Discrete(val) => val.into_py(py),
+            Sample::Box(values) => {
+                let py_list = PyList::new_bound(py, values);
+                py_list.into()
+            }
+            Sample::OneOf(index, sample) => {
+                let py_list = PyList::new_bound(py, &[index.into_py(py), sample.into_py(py)]);
+                py_list.into()
+            }
+            Sample::Tuple(samples) => {
+                let py_list = PyList::new_bound(py, samples.into_iter().map(|s| s.into_py(py)).collect::<Vec<_>>());
+                py_list.into()
+            }
+            Sample::Dict(map) => {
+                let py_dict = PyDict::new_bound(py);
+                for (key, value) in map {
+                    py_dict
+                        .set_item(key.into_py(py), value.into_py(py))
+                        .expect("Failed to set item");
+                }
+                py_dict.into()
             }
         }
     }
 
     fn to_python_nested(nested_sample: &Vec<Sample>, py: Python<'_>) -> PyResult<PyObject> {
-        let py_list = nested_sample
-            .iter()
-            .map(|s| Self::to_python(s, py))
-            .collect::<Result<Vec<PyObject>, _>>()?;
+        let py_list: Vec<_> = nested_sample.iter().map(|s| Sample::to_python(s.clone(), py)).collect();
         Ok(PyList::new_bound(py, py_list).into())
     }
 

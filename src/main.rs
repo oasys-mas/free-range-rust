@@ -1,19 +1,38 @@
 use simple_logger::SimpleLogger;
+use std::time::Instant;
 
 use free_range_rust::Space;
 
 fn main() {
     let _ = SimpleLogger::new().without_timestamps().init().unwrap();
 
-    //let head = BeliefNode::new(0);
-    let action_space = Space::new_one_of(vec![
-        Space::new_discrete(3, 0),
-        Space::new_discrete(3, 0),
-        Space::new_one_of(vec![
-            Space::new_discrete(2, 0),
-            Space::new_one_of(vec![Space::new_discrete(5, 0)]),
-        ]),
-    ]);
+    let discrete_spaces = vec![
+        Space::Discrete { n: 1, start: 0 },
+        Space::Discrete { n: 1, start: 0 },
+        Space::Discrete { n: 1, start: -1 },
+        Space::Discrete { n: 1, start: -2 },
+        Space::Discrete { n: 1, start: -3 },
+    ];
+
+    // Create the `OneOf` space, which contains the Discrete spaces
+    let one_of_space = Space::OneOf {
+        spaces: discrete_spaces,
+    };
+
+    // Create the `Vector` space, which is a repetition of the `OneOf` space 10 times
+    let vector_space = Space::Vector {
+        spaces: vec![one_of_space; 1000], // Repeat `OneOf` 10 times
+    };
+
+    let start_time = Instant::now();
+
+    for _ in 0..1_000_000 {
+        vector_space.enumerate_nested();
+    }
+
+    let duration = start_time.elapsed();
+
+    println!("Time elapsed in enumerate_oneof: {:?}", duration);
 
     //BeliefNode::create_action_nodes(&head, action_space.clone(), vec![]);
 
