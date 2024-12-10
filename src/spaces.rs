@@ -63,8 +63,8 @@ impl Space {
     // get the length of the space
     pub fn len(&self) -> usize {
         match self {
-            Space::Discrete {n, start: _} => *n as usize,
-            Space::Box {low, high: _} => low.len(),
+            Space::Discrete {n: _, start: _} => panic!("Cannot call len on discrete space, see space.n"),
+            Space::Box {low: _, high: _} => panic!("Cannot call len on box space, see space.low, space.high, and space.shape"),
             Space::Tuple {spaces} | Space::OneOf {spaces} | Space::Vector {spaces} => spaces.len(),
             Space::Dict {spaces} => spaces.len(),
         }
