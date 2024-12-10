@@ -290,7 +290,7 @@ impl Space {
                 write!(f, "{}}}}}", indent)
             }
             Space::Vector { spaces } => {
-                write!(f, "{}Vector {{ spaces=[", indent)?;
+                writeln!(f, "{}Vector {{ spaces=[", indent)?;
                 for space in spaces {
                     space.fmt(f, level + 1)?;
                     writeln!(f)?;
