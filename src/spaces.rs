@@ -62,10 +62,8 @@ impl Space {
     // get the length of the space
     pub fn len(&self) -> usize {
         match self {
-            Space::Discrete { n: _, start: _ } => panic!("Cannot call len on discrete space, see space.n"),
-            Space::Box { low: _, high: _ } => {
-                panic!("Cannot call len on box space, see space.low, space.high, and space.shape")
-            }
+            Space::Discrete { n: _, start: _ } => panic!("Cannot call len on Discrete space"),
+            Space::Box { low: _, high: _ } => panic!("Cannot call len on Box space"),
             Space::Tuple { spaces } | Space::OneOf { spaces } | Space::Vector { spaces } => spaces.len(),
             Space::Dict { spaces } => spaces.len(),
         }
@@ -484,6 +482,56 @@ impl Sample {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    #[should_panic(expected = "Cannot call len on Discrete space")]
+    fn test_discrete_space_len() {
+        let space = Space::new_discrete(5, 10);
+
+        space.len();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot call len on Box space")]
+    fn test_box_space_len() {
+        let space = Space::new_box(vec![0, 0, 0], vec![1, 2, 3]);
+
+        space.len();
+    }
+
+    #[test]
+    fn test_oneof_space_len() {
+        let space = Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
+        assert_eq!(space.len(), 2);
+    }
+
+    #[test]
+    fn test_dict_space_len() {
+        let space = Space::new_dict(
+            vec![
+                ("a".to_string(), Space::new_discrete(3, 5)),
+                ("b".to_string(), Space::new_discrete(2, 10)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        assert_eq!(space.len(), 2);
+    }
+
+    #[test]
+    fn test_tuple_space_len() {
+        let space = Space::new_tuple(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
+
+        assert_eq!(space.len(), 2);
+    }
+
+    #[test]
+    fn test_vector_space_len() {
+        let space = Space::new_vector(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
+
+        assert_eq!(space.len(), 2);
+    }
 
     #[test]
     fn test_discrete_space_sample() {
