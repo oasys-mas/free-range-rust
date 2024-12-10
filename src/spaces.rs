@@ -9,7 +9,6 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Space {
     /// A discrete space with a range of values.
-    #[pyo3(name = "Discrete")]
     Discrete { n: i32, start: i32 },
 
     /// A space that represents one of multiple possible sub-spaces.
@@ -142,11 +141,18 @@ impl Space {
                 let (index, sub_space) = valid_spaces[rng.gen_range(0..valid_spaces.len())];
                 Sample::OneOf(index as i32, Box::new(sub_space.sample_with_seed(seed + 1)))
             }
-            Space::Tuple { spaces } => Sample::Tuple(spaces.iter().map(|space| space.sample()).collect()),
+            Space::Tuple { spaces } => Sample::Tuple(
+                spaces
+                    .iter()
+                    .enumerate()
+                    .map(|(index, space)| space.sample_with_seed(seed + index as u64))
+                    .collect(),
+            ),
             Space::Dict { spaces } => Sample::Dict(
                 spaces
                     .iter()
-                    .map(|(key, space)| (key.clone(), space.sample()))
+                    .enumerate()
+                    .map(|(index, (key, space))| (key.clone(), space.sample_with_seed(seed + index as u64)))
                     .collect(),
             ),
             _ => panic!("Cannot call sample on vector space"),
@@ -166,7 +172,11 @@ impl Space {
     /// Sample a single value from each of the nested spaces with a fixed seed.
     pub fn sample_nested_with_seed(&self, seed: u64) -> Vec<Sample> {
         match self {
-            Space::Vector { spaces } => spaces.iter().map(|space| space.sample_with_seed(seed)).collect(),
+            Space::Vector { spaces } => spaces
+                .iter()
+                .enumerate()
+                .map(|(index, space)| space.sample_with_seed(seed + index as u64))
+                .collect(),
             _ => panic!("Cannot call sample_nested on non-vector space"),
         }
     }
@@ -383,7 +393,7 @@ impl Hash for Sample {
             Sample::Dict(map) => {
                 // Hash each key-value pair in the HashMap
                 let mut sorted_entries: Vec<_> = map.iter().collect();
-                sorted_entries.sort_by(|a, b| a.0.cmp(b.0)); // Sort by key to ensure deterministic hashing
+                sorted_entries.sort_by(|a, b| a.0.cmp(b.0));
                 for (key, value) in sorted_entries {
                     key.hash(state);
                     value.hash(state); // Hash the value (which is a `Sample`)
@@ -545,7 +555,6 @@ mod tests {
         let Sample::Discrete(sample_with_seed) = *sample_with_seed else {
             panic!("Inner sample is not of type Sample::Discrete");
         };
-        println!("index: {}, sample: {}", index, sample_with_seed);
 
         assert!(
             (index == 0 && sample_with_seed >= 5 && sample_with_seed < 8)
@@ -560,9 +569,83 @@ mod tests {
             panic!("Inner sample is not of type Sample::Discrete");
         };
 
-        println!("index: {}, sample: {}", repeated_index, repeated_sample);
-
         assert_eq!(index, repeated_index);
+        assert_eq!(sample_with_seed, repeated_sample);
+    }
+
+    #[test]
+    fn test_dict_space_sample() {
+        let space = Space::new_dict(
+            vec![
+                ("first".to_string(), Space::new_discrete(3, 5)),
+                ("second".to_string(), Space::new_discrete(2, 10)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        // Sample without a fixed seed
+        let Sample::Dict(sample) = space.sample() else {
+            panic!("Sample is not of type Sample::Dict");
+        };
+
+        let first_sample = sample.get("first").unwrap();
+        let second_sample = sample.get("second").unwrap();
+        let Sample::Discrete(first_sample) = first_sample else {
+            panic!("First sample is not of type Sample::Discrete");
+        };
+        assert!(*first_sample >= 5 && *first_sample < 8);
+
+        let Sample::Discrete(second_sample) = second_sample else {
+            panic!("Second sample is not of type Sample::Discrete");
+        };
+        assert!(*second_sample >= 10 && *second_sample < 12);
+
+        // Sample with a fixed seed
+        let seed = 42;
+        let Sample::Dict(sample_with_seed) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Dict");
+        };
+
+        let Sample::Dict(repeated_sample_with_seed) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Dict");
+        };
+
+        assert_eq!(sample_with_seed, repeated_sample_with_seed);
+    }
+
+    #[test]
+    fn test_tuple_space_sample_nested() {
+        let space = Space::new_tuple(vec![Space::new_discrete(5, 10), Space::new_discrete(2, 20)]);
+
+        // Test sampling without a fixed seed
+        let Sample::Tuple(sample) = space.sample() else {
+            panic!("Sample is not of type Sample::Tuple");
+        };
+
+        let Sample::Discrete(first_sample) = sample[0] else {
+            panic!("First sample is not of type Sample::Discrete");
+        };
+
+        let Sample::Discrete(second_sample) = sample[1] else {
+            panic!("Second sample is not of type Sample::Discrete");
+        };
+
+        assert!(first_sample >= 10 && first_sample < 15);
+        assert!(second_sample >= 20 && second_sample < 22);
+
+        // Test nested sampling with a fixed seed
+        let seed = 42;
+        let sample_with_seed = space.sample_with_seed(seed);
+        let Sample::Tuple(sample_with_seed) = sample_with_seed else {
+            panic!("Sample is not of type Sample::Tuple");
+        };
+
+        // Consistency check: repeat sampling with the same seed
+        let Sample::Tuple(repeated_sample) = space.sample_with_seed(seed) else {
+            panic!("Sample is not of type Sample::Tuple");
+        };
+
         assert_eq!(sample_with_seed, repeated_sample);
     }
 
@@ -590,27 +673,9 @@ mod tests {
         let nested_sample_with_seed = space.sample_nested_with_seed(seed);
         assert_eq!(nested_sample_with_seed.len(), 2);
 
-        let samples: Vec<i32> = nested_sample_with_seed
-            .iter()
-            .map(|sample| match sample {
-                Sample::Discrete(i) => *i,
-                _ => panic!("Sample is not of type Sample::Discrete"),
-            })
-            .collect();
-
-        assert!(samples[0] >= 10 && samples[0] < 15);
-        assert!(samples[1] >= 20 && samples[1] < 22);
-
-        // Consistency check: repeat nested sampling with the same seed
         let repeated_nested_sample = space.sample_nested_with_seed(seed);
-        let repeat_sample: Vec<i32> = repeated_nested_sample
-            .iter()
-            .map(|sample| match sample {
-                Sample::Discrete(i) => *i,
-                _ => panic!("Sample is not of type Sample::Discrete"),
-            })
-            .collect();
-        assert_eq!(samples, repeat_sample);
+
+        assert_eq!(nested_sample_with_seed, repeated_nested_sample);
     }
 
     #[test]
@@ -631,6 +696,31 @@ mod tests {
     #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
     fn test_box_throws_with_nested_sample() {
         let space = Space::new_box(vec![0, 0], vec![1, 1]);
+        space.sample_nested();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
+    fn test_tuple_throws_with_nested_sample() {
+        let space = Space::new_tuple(vec![
+            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
+            Space::new_discrete(5, 15),
+        ]);
+        space.sample_nested();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
+    fn test_dict_throws_with_nested_sample() {
+        let space = Space::new_dict(
+            vec![
+                ("first".to_string(), Space::new_discrete(3, 5)),
+                ("second".to_string(), Space::new_discrete(2, 10)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
         space.sample_nested();
     }
 
@@ -675,6 +765,50 @@ mod tests {
             assert!(sample[2] >= 0 && sample[2] <= 3);
 
             assert!(seen.insert(sample.clone()), "Duplicate enumeration found: {:?}", sample)
+        }
+    }
+
+    #[test]
+    fn test_dict_space_enumerate() {
+        let space = Space::new_dict(
+            vec![
+                ("first".to_string(), Space::new_discrete(3, 5)),
+                ("second".to_string(), Space::new_discrete(2, 10)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = space.enumerate();
+
+        assert_eq!(result.len(), 6);
+
+        let mut seen = HashSet::new();
+
+        for sample in result.iter() {
+            let Sample::Dict(sample) = sample else {
+                panic!("Sample is not of type Sample::Dict")
+            };
+
+            let first_sample = sample.get("first").unwrap();
+            let second_sample = sample.get("second").unwrap();
+
+            let Sample::Discrete(first_sample) = first_sample else {
+                panic!("First sample is not of type Sample::Discrete")
+            };
+
+            let Sample::Discrete(second_sample) = second_sample else {
+                panic!("Second sample is not of type Sample::Discrete")
+            };
+
+            assert!(*first_sample >= 5 && *first_sample < 8);
+            assert!(*second_sample >= 10 && *second_sample < 12);
+
+            assert!(
+                seen.insert(Sample::Dict(sample.clone())),
+                "Duplicate enumeration found: {:?}",
+                sample
+            )
         }
     }
 
@@ -725,6 +859,30 @@ mod tests {
     #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
     fn test_oneof_throws_with_nested_enumerate() {
         let space = Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
+        space.enumerate_nested();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
+    fn test_dict_throws_with_nested_enumerate() {
+        let space = Space::new_dict(
+            vec![
+                ("first".to_string(), Space::new_discrete(3, 5)),
+                ("second".to_string(), Space::new_discrete(2, 10)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        space.enumerate_nested();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
+    fn test_tuple_throws_with_nested_enumerate() {
+        let space = Space::new_tuple(vec![
+            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
+            Space::new_discrete(5, 15),
+        ]);
         space.enumerate_nested();
     }
 
