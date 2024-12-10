@@ -35,7 +35,8 @@ impl Display for Space {
 }
 
 impl Space {
-    pub fn new_discrete(n: i32, start: i32) -> Self {
+    pub fn new_discrete(n: i32, start: Option<i32>) -> Self {
+        let start = start.unwrap_or(0);
         Space::Discrete { n, start }
     }
 
@@ -57,6 +58,16 @@ impl Space {
 
     pub fn new_vector(spaces: Vec<Space>) -> Self {
         Space::Vector { spaces }
+    }
+
+    // get the length of the space
+    pub fn len(&self) -> usize {
+        match self {
+            Space::Discrete {n, start: _} => *n as usize,
+            Space::Box {low, high: _} => low.len(),
+            Space::Tuple {spaces} | Space::OneOf {spaces} | Space::Vector {spaces} => spaces.len(),
+            Space::Dict {spaces} => spaces.len(),
+        }
     }
 
     ///  Sample a single value from the space.
@@ -313,6 +324,10 @@ impl Space {
 
     fn __eq__(&self, other: &Self) -> bool {
         self == other
+    }
+
+    fn __len__(&self) -> usize {
+        self.len()
     }
 
     #[pyo3(name = "sample")]
