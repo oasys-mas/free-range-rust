@@ -35,8 +35,7 @@ impl Display for Space {
 }
 
 impl Space {
-    pub fn new_discrete(n: i32, start: Option<i32>) -> Self {
-        let start = start.unwrap_or(0);
+    pub fn new_discrete(n: i32, start: i32) -> Self {
         Space::Discrete { n, start }
     }
 
