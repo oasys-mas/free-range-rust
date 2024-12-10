@@ -7,20 +7,20 @@ class TestLen(unittest.TestCase):
 
     def test_len_Discrete(self)->None:
         space = Space.Discrete(10, start=0)
-        self.assertEqual(len(space), 10)
+        self.assertEqual(space.n, 10)
 
     def test_len_Box(self)->None:
         space = Space.Box(
             low=[0],
             high=[1],
         )
-        self.assertEqual(len(space), 1)
+        self.assertEqual(len(space.low), 1)
 
         space = Space.Box(
             low=[0, 0],
             high=[1, 1],
         )
-        self.assertEqual(len(space), 2)
+        self.assertEqual(len(space.low), 2)
 
     def test_len_Dict(self)->None:
         space = Space.Dict({
