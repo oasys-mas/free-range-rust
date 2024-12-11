@@ -39,10 +39,10 @@ jobs:
         run: | 
           if [[ "${{ github.event_name }}" == "push" && "${{ github.event.head_commit.message }}" == "Merge pull request"* ]]; then
             echo "This is a PR merge commit."
-            echo "::set-output name=pr_merge::true"
+            echo "pr_merge=true" >> $GITHUB_OUTPUT
           else
             echo "This is a direct push to main."
-            echo "::set-output name=pr_merge::false"
+            echo "pr_merge=false" >> $GITHUB_OUTPUT
           fi
       - name: Determine version bump type
         id: version-bump
@@ -66,7 +66,7 @@ jobs:
             echo "Direct push to main detected. Bumping version as patch."
           fi
 
-          echo "::set-output name=bump_type::$bump_type"
+          echo "bump_type=$bump_type" >> $GITHUB_OUTPUT
       - name: Activate nix-shell
         uses: nicknovitski/nix-develop@v1.2.0
         with:
@@ -79,7 +79,10 @@ jobs:
       - name: Commit changes
         uses: stefanzweifel/git-auto-commit-action@v5.0.1
         with:
-          commit_message: "[skip ci] Incrementing project version"
+          commit_message: |
+            Incrementing project version
+
+            [skip ci]
   build:
     runs-on: [self-hosted]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.ref == 'refs/heads/main')
