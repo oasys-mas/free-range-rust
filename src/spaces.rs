@@ -80,12 +80,9 @@ impl Space {
 
                 Sample::Discrete(rng.gen_range(*start..(*start + *n)))
             }
-            Space::Box { low, high } => Sample::Box(
-                low.iter()
-                    .zip(high.iter())
-                    .map(|(l, h)| rng.gen_range(*l..=*h))
-                    .collect(),
-            ),
+            Space::Box { low, high } => {
+                Sample::Box(low.iter().zip(high.iter()).map(|(l, h)| rng.gen_range(*l..=*h)).collect())
+            }
             Space::OneOf { spaces } => {
                 let valid_spaces: Vec<_> = spaces
                     .iter()
@@ -104,12 +101,9 @@ impl Space {
                 Sample::OneOf(index as i32, Box::new(sub_space.sample()))
             }
             Space::Tuple { spaces } => Sample::Tuple(spaces.iter().map(|space| space.sample()).collect()),
-            Space::Dict { spaces } => Sample::Dict(
-                spaces
-                    .iter()
-                    .map(|(key, space)| (key.clone(), space.sample()))
-                    .collect(),
-            ),
+            Space::Dict { spaces } => {
+                Sample::Dict(spaces.iter().map(|(key, space)| (key.clone(), space.sample())).collect())
+            }
             _ => panic!("Cannot call sample on vector space"),
         };
 
@@ -128,12 +122,9 @@ impl Space {
 
                 Sample::Discrete(rng.gen_range(*start..(*start + *n)))
             }
-            Space::Box { low, high } => Sample::Box(
-                low.iter()
-                    .zip(high.iter())
-                    .map(|(l, h)| rng.gen_range(*l..=*h))
-                    .collect(),
-            ),
+            Space::Box { low, high } => {
+                Sample::Box(low.iter().zip(high.iter()).map(|(l, h)| rng.gen_range(*l..=*h)).collect())
+            }
             Space::OneOf { spaces } => {
                 let valid_spaces: Vec<_> = spaces
                     .iter()
@@ -152,11 +143,7 @@ impl Space {
                 Sample::OneOf(index as i32, Box::new(sub_space.sample_with_seed(seed + 1)))
             }
             Space::Tuple { spaces } => Sample::Tuple(
-                spaces
-                    .iter()
-                    .enumerate()
-                    .map(|(index, space)| space.sample_with_seed(seed + index as u64))
-                    .collect(),
+                spaces.iter().enumerate().map(|(index, space)| space.sample_with_seed(seed + index as u64)).collect(),
             ),
             Space::Dict { spaces } => Sample::Dict(
                 spaces
@@ -182,11 +169,9 @@ impl Space {
     /// Sample a single value from each of the nested spaces with a fixed seed.
     pub fn sample_nested_with_seed(&self, seed: u64) -> Vec<Sample> {
         match self {
-            Space::Vector { spaces } => spaces
-                .iter()
-                .enumerate()
-                .map(|(index, space)| space.sample_with_seed(seed + index as u64))
-                .collect(),
+            Space::Vector { spaces } => {
+                spaces.iter().enumerate().map(|(index, space)| space.sample_with_seed(seed + index as u64)).collect()
+            }
             _ => panic!("Cannot call sample_nested on non-vector space"),
         }
     }
@@ -219,9 +204,7 @@ impl Space {
                 .enumerate()
                 .flat_map(|(idx, space)| {
                     let sub_results = space.enumerate();
-                    sub_results
-                        .into_iter()
-                        .map(move |sample| Sample::OneOf(idx as i32, Box::new(sample)))
+                    sub_results.into_iter().map(move |sample| Sample::OneOf(idx as i32, Box::new(sample)))
                 })
                 .collect(),
             Space::Tuple { spaces } => spaces
@@ -436,9 +419,7 @@ impl IntoPy<PyObject> for Sample {
             Sample::Dict(map) => {
                 let py_dict = PyDict::new_bound(py);
                 for (key, value) in map {
-                    py_dict
-                        .set_item(key.into_py(py), value.into_py(py))
-                        .expect("Failed to set item");
+                    py_dict.set_item(key.into_py(py), value.into_py(py)).expect("Failed to set item");
                 }
                 py_dict.into()
             }
@@ -465,9 +446,7 @@ impl Sample {
             Sample::Dict(map) => {
                 let py_dict = PyDict::new_bound(py);
                 for (key, value) in map {
-                    py_dict
-                        .set_item(key.into_py(py), value.into_py(py))
-                        .expect("Failed to set item");
+                    py_dict.set_item(key.into_py(py), value.into_py(py)).expect("Failed to set item");
                 }
                 py_dict.into()
             }
@@ -480,10 +459,8 @@ impl Sample {
     }
 
     fn to_python_nested_nested(nested_sample: &Vec<Vec<Sample>>, py: Python<'_>) -> PyResult<PyObject> {
-        let py_list = nested_sample
-            .iter()
-            .map(|s| Self::to_python_nested(s, py))
-            .collect::<Result<Vec<PyObject>, _>>()?;
+        let py_list =
+            nested_sample.iter().map(|s| Self::to_python_nested(s, py)).collect::<Result<Vec<PyObject>, _>>()?;
         Ok(PyList::new_bound(py, py_list).into())
     }
 }
@@ -491,22 +468,43 @@ impl Sample {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paste::paste;
     use std::collections::HashSet;
 
-    #[test]
-    #[should_panic(expected = "Cannot call len on Discrete space")]
-    fn test_discrete_space_len() {
-        let space = Space::new_discrete(5, 10);
+    macro_rules! panic_test_space {
+        ($name:ident, $init:expr, $( $method:ident ),+) => {
+            $(
+                paste! {
+                    #[test]
+                    #[should_panic(expected = "Cannot call " $method " on non-vector space")]
+                    fn [<test_ $name _throws_with_ $method>]() {
+                        $init.$method();
+                    }
+                }
+            )+
+        };
 
-        space.len();
-    }
+        (nested $name:ident, $init:expr, $( $method:ident ),+) => {
+            $(
+                paste! {
+                    #[test]
+                    #[should_panic(expected = "Cannot call " $method " on vector space")]
+                    fn [<test_ $name _throws_with_ $method>]() {
+                        $init.$method();
+                    }
+                }
+            )+
+        };
 
-    #[test]
-    #[should_panic(expected = "Cannot call len on Box space")]
-    fn test_box_space_len() {
-        let space = Space::new_box(vec![0, 0, 0], vec![1, 2, 3]);
-
-        space.len();
+        ($name:ident, $message:expr, $init:expr, $method:ident) => {
+            paste! {
+                #[test]
+                #[should_panic(expected = $message)]
+                fn [<test_ $name _throws_with_ $method>]() {
+                    $init.$method();
+                }
+            }
+        };
     }
 
     #[test]
@@ -518,12 +516,9 @@ mod tests {
     #[test]
     fn test_dict_space_len() {
         let space = Space::new_dict(
-            vec![
-                ("a".to_string(), Space::new_discrete(3, 5)),
-                ("b".to_string(), Space::new_discrete(2, 10)),
-            ]
-            .into_iter()
-            .collect(),
+            vec![("a".to_string(), Space::new_discrete(3, 5)), ("b".to_string(), Space::new_discrete(2, 10))]
+                .into_iter()
+                .collect(),
         );
 
         assert_eq!(space.len(), 2);
@@ -640,12 +635,9 @@ mod tests {
     #[test]
     fn test_dict_space_sample() {
         let space = Space::new_dict(
-            vec![
-                ("first".to_string(), Space::new_discrete(3, 5)),
-                ("second".to_string(), Space::new_discrete(2, 10)),
-            ]
-            .into_iter()
-            .collect(),
+            vec![("first".to_string(), Space::new_discrete(3, 5)), ("second".to_string(), Space::new_discrete(2, 10))]
+                .into_iter()
+                .collect(),
         );
 
         // Sample without a fixed seed
@@ -743,62 +735,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
-    fn test_oneof_throws_with_nested_sample() {
-        let space = Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
-        space.sample_nested();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
-    fn test_discrete_throws_with_nested_sample() {
-        let space = Space::new_discrete(5, 10);
-        space.sample_nested();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
-    fn test_box_throws_with_nested_sample() {
-        let space = Space::new_box(vec![0, 0], vec![1, 1]);
-        space.sample_nested();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
-    fn test_tuple_throws_with_nested_sample() {
-        let space = Space::new_tuple(vec![
-            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
-            Space::new_discrete(5, 15),
-        ]);
-        space.sample_nested();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot call sample_nested on non-vector space")]
-    fn test_dict_throws_with_nested_sample() {
-        let space = Space::new_dict(
-            vec![
-                ("first".to_string(), Space::new_discrete(3, 5)),
-                ("second".to_string(), Space::new_discrete(2, 10)),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        space.sample_nested();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot call sample on vector space")]
-    fn test_vector_throws_with_sample() {
-        let space = Space::new_vector(vec![
-            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
-            Space::new_discrete(5, 15),
-        ]);
-        space.sample();
-    }
-
-    #[test]
     fn test_discrete_space_enumerate() {
         let space = Space::new_discrete(5, 10);
         let enumerated = space.enumerate();
@@ -820,9 +756,7 @@ mod tests {
 
         let mut seen = HashSet::new();
         for sample in result.iter() {
-            let Sample::Box(sample) = sample else {
-                panic!("Sample is not of type Sample::Box")
-            };
+            let Sample::Box(sample) = sample else { panic!("Sample is not of type Sample::Box") };
 
             assert!(sample[0] >= 0 && sample[0] <= 1);
             assert!(sample[1] >= 0 && sample[1] <= 2);
@@ -835,12 +769,9 @@ mod tests {
     #[test]
     fn test_dict_space_enumerate() {
         let space = Space::new_dict(
-            vec![
-                ("first".to_string(), Space::new_discrete(3, 5)),
-                ("second".to_string(), Space::new_discrete(2, 10)),
-            ]
-            .into_iter()
-            .collect(),
+            vec![("first".to_string(), Space::new_discrete(3, 5)), ("second".to_string(), Space::new_discrete(2, 10))]
+                .into_iter()
+                .collect(),
         );
 
         let result = space.enumerate();
@@ -850,9 +781,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         for sample in result.iter() {
-            let Sample::Dict(sample) = sample else {
-                panic!("Sample is not of type Sample::Dict")
-            };
+            let Sample::Dict(sample) = sample else { panic!("Sample is not of type Sample::Dict") };
 
             let first_sample = sample.get("first").unwrap();
             let second_sample = sample.get("second").unwrap();
@@ -868,11 +797,7 @@ mod tests {
             assert!(*first_sample >= 5 && *first_sample < 8);
             assert!(*second_sample >= 10 && *second_sample < 12);
 
-            assert!(
-                seen.insert(Sample::Dict(sample.clone())),
-                "Duplicate enumeration found: {:?}",
-                sample
-            )
+            assert!(seen.insert(Sample::Dict(sample.clone())), "Duplicate enumeration found: {:?}", sample)
         }
     }
 
@@ -905,58 +830,17 @@ mod tests {
         assert_eq!(result[1], expected_second_space);
     }
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
-    fn test_discrete_throws_with_nested_enumerate() {
-        let space = Space::new_discrete(5, 10);
-        space.enumerate_nested();
-    }
+    panic_test_space!(discrete, Space::new_discrete(5, 10), sample_nested, enumerate_nested);
+    panic_test_space!(discrete, "Cannot call len on Discrete space", Space::new_discrete(5, 10), len);
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
-    fn test_box_throws_with_nested_enumerate() {
-        let space = Space::new_box(vec![0, 0, 0], vec![1, 2, 3]);
-        space.enumerate_nested();
-    }
+    panic_test_space!(box, Space::new_box(vec![0, 0, 0], vec![1, 2, 3]), sample_nested, enumerate_nested);
+    panic_test_space!(box, "Cannot call len on Box space", Space::new_box(vec![0, 0, 0], vec![1, 2, 3]), len);
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
-    fn test_oneof_throws_with_nested_enumerate() {
-        let space = Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]);
-        space.enumerate_nested();
-    }
+    panic_test_space!(tuple, Space::new_tuple(vec![Space::new_discrete(5, 10)]), sample_nested, enumerate_nested);
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
-    fn test_dict_throws_with_nested_enumerate() {
-        let space = Space::new_dict(
-            vec![
-                ("first".to_string(), Space::new_discrete(3, 5)),
-                ("second".to_string(), Space::new_discrete(2, 10)),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        space.enumerate_nested();
-    }
+    panic_test_space!(dict, Space::new_dict(HashMap::new()), sample_nested, enumerate_nested);
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate_nested on non-vector space")]
-    fn test_tuple_throws_with_nested_enumerate() {
-        let space = Space::new_tuple(vec![
-            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
-            Space::new_discrete(5, 15),
-        ]);
-        space.enumerate_nested();
-    }
+    panic_test_space!(oneof, Space::new_one_of(vec![Space::new_discrete(3, 5)]), sample_nested, enumerate_nested);
 
-    #[test]
-    #[should_panic(expected = "Cannot call enumerate on vector space")]
-    fn test_vector_throws_with_enumerate() {
-        let space = Space::new_vector(vec![
-            Space::new_one_of(vec![Space::new_discrete(3, 5), Space::new_discrete(2, 10)]),
-            Space::new_discrete(5, 15),
-        ]);
-        space.enumerate();
-    }
+    panic_test_space!(nested vector, Space::new_vector(vec![Space::new_discrete(5, 10)]), sample, enumerate);
 }
