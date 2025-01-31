@@ -15,9 +15,7 @@ fn main() {
     ];
 
     // Create the `OneOf` space, which contains the Discrete spaces
-    let one_of_space = Space::OneOf {
-        spaces: discrete_spaces,
-    };
+    let one_of_space = Space::OneOf { spaces: discrete_spaces };
 
     // Create the `Vector` space, which is a repetition of the `OneOf` space 10 times
     let vector_space = Space::Vector {
