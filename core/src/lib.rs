@@ -3,11 +3,3 @@
 
 pub mod spaces;
 pub use spaces::Space;
-
-use pyo3::prelude::*;
-
-#[pymodule]
-fn free_range_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Space>()?;
-    Ok(())
-}

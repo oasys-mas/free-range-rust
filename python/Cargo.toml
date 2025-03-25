@@ -1,0 +1,11 @@
+[package]
+name = "python"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+free_range_rust = { path = "../core" }
+
+[lib]
+crate-type = ["cdylib"]
