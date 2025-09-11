@@ -1,0 +1,23 @@
+[package]
+name = "core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.core]
+path = "../core"
+features = ["fuzz"]
+
+[dependencies]
+bumpalo = { version = "3.14", features = ["collections"] }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "wildfire_fuzz"
+path = "fuzz_targets/wildfire_fuzz.rs"
+test = false
+doc = false
+bench = false

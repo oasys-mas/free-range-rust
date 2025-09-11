@@ -266,3 +266,7 @@ Cargo.lock
 
 # End of https://www.toptal.com/developers/gitignore/api/direnv,python,rust
 
+target
+corpus
+artifacts
+coverage
