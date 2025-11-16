@@ -80,7 +80,7 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5.0.1
         with:
           commit_message: |
-            Incrementing project version
+            chore: incrementing project version
 
             [skip ci]
   build:

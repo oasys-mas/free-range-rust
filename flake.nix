@@ -4,18 +4,22 @@
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix.url = "github:numtide/treefmt-nix";
 
-    fenix = {
-      url = "github:nix-community/fenix";
+    devenv = {
+      url = "github:cachix/devenv";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
   outputs = {
-    fenix,
+    devenv,
     flake-utils,
     nixpkgs,
     treefmt-nix,
     ...
-  }:
+  } @ inputs:
     flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {
@@ -36,58 +40,39 @@
       in {
         formatter = treefmtEval.config.build.wrapper;
 
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs =
-          with pkgs; [
-              # cudaPackages.cuda_nvcc
-              # cudaPackages.cudatoolkit
-              pkg-config
-              stdenv.cc.cc.lib
-          ] ++ 
-            (with fenix.packages.${system}.latest;
-            [
-              cargo
-              rust-analyzer
-              rustc
-            ]);
+        devShells.default = devenv.lib.mkShell {
+          inherit inputs pkgs;
 
-          buildInputs = with pkgs; [
-            poetry
-            python312
-            python312Packages.virtualenv
+          modules = [
+            ({pkgs, ...}: {
+              languages = {
+                nix.enable = true;
+                rust = {
+                  enable = true;
+                  channel = "nightly";
+                };
+              };
+
+              packages = with pkgs; [
+                alejandra
+                bacon
+                cargo-fuzz
+                cargo-release
+                clippy
+                presenterm
+                rustfmt
+                rusty-man
+                yapf
+              ];
+
+              enterShell = ''
+                export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$NIX_LD_LIBRARY_PATH
+                export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/run/opengl-driver/lib
+
+                export CUDA_ROOT="${pkgs.cudaPackages.cudatoolkit}"
+              '';
+            })
           ];
-
-          packages =
-          with pkgs; [
-            gdb
-            python312Packages.debugpy
-            rusty-man
-            yapf
-          ] ++ 
-            (with fenix.packages.${system}.latest;
-            [
-              bacon
-              cargo-fuzz
-              cargo-info
-              cargo-release
-              clippy
-              rustfmt
-            ]);
-
-          shellHook = 
-          let
-          ldLibs = nixpkgs.lib.strings.makeLibraryPath [
-            pkgs.stdenv.cc.cc.lib
-          ];
-          in
-          ''
-            export LD_LIBRARY_PATH=${ldLibs}
-            # export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.libGL}/lib
-            # export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.glib.out}/lib
-            # export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/run/opengl-driver/lib
-
-            export CUDA_ROOT="${pkgs.cudaPackages.cudatoolkit}"
-          '';
         };
       }
     );
