@@ -36,7 +36,8 @@ fn main() -> Result<()> {
             let config: WildfireConfiguration = serde_json::from_str(&data)?;
 
             let arena = Bump::new();
-            let mut env = WildfireEnvironment::new(config, &arena)?;
+            let mut env =
+                WildfireEnvironment::new(config, &arena).expect("unable to initialize environment");
 
             if let Some(seed) = seed {
                 env.reset_seeded(seed)?;

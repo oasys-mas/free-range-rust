@@ -3,10 +3,12 @@ pub mod error;
 pub mod state;
 pub mod transitions;
 
+use async_std::task;
 use bumpalo::Bump;
 use color_eyre::Result;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use sqlx::SqlitePool;
 use std::any::Any;
 use std::collections::HashMap;
 use std::iter::{repeat_n, repeat_with};
@@ -31,6 +33,7 @@ pub struct WildfireEnvironment<'a> {
     transitions: Vec<Box<WildfireTransition<'a>>>,
 
     outputs: HashMap<String, Box<dyn Any>>,
+    db: sqlx::SqlitePool,
 }
 
 impl<'a> SimulatedEnvironment<'a> for WildfireEnvironment<'a> {
@@ -40,17 +43,27 @@ impl<'a> SimulatedEnvironment<'a> for WildfireEnvironment<'a> {
     fn new(config: WildfireConfiguration, arena: &'a Bump) -> Result<Self> {
         config.validate()?;
 
+        let db: sqlx::SqlitePool = task::block_on(async {
+            let pool: sqlx::SqlitePool = SqlitePool::connect("sqlite://./wildfire.db").await?;
+            let schema = std::fs::read_to_string("thing.sql")?;
+            let mut tx = pool.begin().await?;
+            for stmt in schema.split(';').filter(|s| !s.trim().is_empty()) {
+                sqlx::query(stmt).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+
+            Ok::<sqlx::SqlitePool, color_eyre::Report>(pool)
+        })?;
+
         let state = WildfireState::new(&config, arena);
         Ok(WildfireEnvironment {
             arena,
             rng: StdRng::from_entropy(),
-
             config,
-
             state,
             transitions: vec![],
-
             outputs: HashMap::new(),
+            db,
         })
     }
 
